@@ -16,12 +16,12 @@ class PDFGenerator:
     - Aligned sample text (translation)
     
     Pipeline:
-    1. Open donor PDF as template
-    2. For each page:
-       a. Cover original text with white rectangles
-       b. Insert aligned translation text at correct positions
-       c. Preserve images and non-text elements
-    3. Save the result
+    1. Create blank pages matching donor dimensions
+    2. Copy images from donor at original positions
+    3. Insert translated text at correct positions
+    4. Save the result
+    
+    Does NOT copy original text — only images and layout.
     """
     
     def __init__(self, output_path: str):
@@ -52,7 +52,12 @@ class PDFGenerator:
             self.doc = fitz.open()
     
     def create_blank_pdf(self) -> str:
-        """Create a blank PDF with 1 empty page."""
+        """
+        Create a blank PDF with 1 empty page.
+        
+        Returns:
+            Path to the created PDF
+        """
         self.doc = fitz.open()
         self.doc.new_page()
         self.doc.save(self.output_path)
@@ -77,12 +82,63 @@ class PDFGenerator:
         self._save()
         return page_num
     
+    def insert_text_on_page(
+        self,
+        page_num: int,
+        aligned_fragments: List[Tuple[TextFragment, TextFragment]]
+    ) -> None:
+        """
+        Insert translated text at correct positions on a page.
+        For use with blank pages — does NOT try to cover old text.
+        
+        Args:
+            page_num: Page number to modify (0-based)
+            aligned_fragments: List of (donor_fragment, sample_fragment) pairs
+        """
+        self._open()
+        
+        if page_num >= self.doc.page_count:
+            self.doc.close()
+            self.doc = None
+            raise ValueError(f"Page {page_num} does not exist")
+        
+        page = self.doc[page_num]
+        
+        for donor_frag, sample_frag in aligned_fragments:
+            # Skip if fragments are on different pages
+            if donor_frag.page_num != page_num:
+                continue
+            
+            # Calculate position from donor fragment
+            x0 = donor_frag.x
+            y0 = donor_frag.y
+            y1 = donor_frag.y + donor_frag.height
+            
+            # Insert text at donor's position
+            text_point = fitz.Point(x0, y1 - 2)
+            
+            page.insert_text(
+                text_point,
+                sample_frag.text,
+                fontname="china-s",  # Has Cyrillic glyphs
+                fontsize=sample_frag.font_size
+            )
+        
+        self._save()
+    
     def replace_text_on_page(
         self,
         page_num: int,
         aligned_fragments: List[Tuple[TextFragment, TextFragment]]
     ) -> None:
-        """Replace text on a specific page with aligned translations."""
+        """
+        Replace text on a page with aligned translations.
+        Covers original text with white rectangles, then inserts translation.
+        
+        Args:
+            page_num: Page number to modify (0-based)
+            aligned_fragments: List of (donor_fragment, sample_fragment) pairs
+        """
         self._open()
         
         if page_num >= self.doc.page_count:
@@ -105,13 +161,13 @@ class PDFGenerator:
             white_rect = fitz.Rect(x0 - 2, y0 - 1, x1 + 2, y1 + 2)
             page.draw_rect(white_rect, color=None, fill=(1, 1, 1), width=0)
             
-            # Use 'china-s' font which has better Unicode support including Cyrillic
+            # Insert translation
             text_point = fitz.Point(x0, y1 - 2)
             
             page.insert_text(
                 text_point,
                 sample_frag.text,
-                fontname="china-s",  # Has Cyrillic glyphs
+                fontname="china-s",
                 fontsize=sample_frag.font_size
             )
         
@@ -179,11 +235,10 @@ class PDFGenerator:
         """
         Full PDF generation pipeline.
         
-        1. Opens donor PDF to get page count and dimensions
-        2. Creates output PDF with same page structure
-        3. Copies images from donor
-        4. Replaces text with aligned translations
-        5. Saves and returns the output path
+        1. Creates blank pages matching donor dimensions
+        2. Copies images from donor at original positions
+        3. Inserts translated text at correct positions
+        4. Saves and returns the output path
         
         Args:
             donor_pdf_path: Path to the donor PDF
@@ -196,13 +251,12 @@ class PDFGenerator:
         if not Path(donor_pdf_path).exists():
             raise FileNotFoundError(f"Donor PDF not found: {donor_pdf_path}")
         
-        # Open donor to get structure
+        # Open donor to get page structure
         donor_doc = fitz.open(donor_pdf_path)
         num_pages = donor_doc.page_count
         
-        # Create document with correct page structure
+        # Create blank document with same page sizes
         self.doc = fitz.open()
-        
         for i in range(num_pages):
             donor_page = donor_doc[i]
             self.doc.new_page(
@@ -213,23 +267,21 @@ class PDFGenerator:
         self._save()
         donor_doc.close()
         
-        # Copy images from each page
+        # Copy images from each donor page
         for i in range(num_pages):
             try:
                 self.copy_images_from_donor(donor_pdf_path, donor_page=i, target_page=i)
             except Exception:
                 pass  # Continue even if image copy fails
         
-        # Replace text on each page
+        # Insert translated text on each page
         for i in range(num_pages):
-            # Filter fragments for this page
             page_fragments = [
                 (d, s) for d, s in aligned_fragments
                 if d.page_num == i
             ]
-            
             if page_fragments:
-                self.replace_text_on_page(i, page_fragments)
+                self.insert_text_on_page(i, page_fragments)
         
         return self.output_path
     
@@ -273,5 +325,4 @@ class PDFGenerator:
                 return "Courier-Oblique"
             return "Courier"
         
-        # Default fallback
         return "Helvetica"

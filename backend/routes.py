@@ -299,3 +299,127 @@ async def align_paragraphs(request: dict):
         "total_pairs": len(aligned_pairs),
         "method": "ai" if use_ai else "sequential"
     }
+
+
+# =============================================================================
+# END-TO-END PROCESSING ENDPOINT
+# =============================================================================
+
+@router.post("/process")
+async def process_pdfs(
+    donor: UploadFile = File(...),
+    sample: UploadFile = File(...)
+):
+    """
+    Full end-to-end processing pipeline.
+    """
+    from fastapi.responses import FileResponse
+    
+    # Validate files
+    if not donor.filename.endswith('.pdf') or not sample.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Both files must be PDF")
+    
+    # Save uploaded files
+    upload_dir = get_upload_dir()
+    
+    donor_path = upload_dir / f"donor_{uuid.uuid4()}.pdf"
+    sample_path = upload_dir / f"sample_{uuid.uuid4()}.pdf"
+    output_path = upload_dir / f"output_{uuid.uuid4()}.pdf"
+    
+    donor_content = await donor.read()
+    sample_content = await sample.read()
+    
+    with open(donor_path, "wb") as f:
+        f.write(donor_content)
+    with open(sample_path, "wb") as f:
+        f.write(sample_content)
+    
+    try:
+        # Step 1: Parse PDFs
+        from backend.services.pdf_parser import PDFParser
+        
+        donor_parser = PDFParser(str(donor_path))
+        sample_parser = PDFParser(str(sample_path))
+        
+        # Get all text as simple fragments
+        donor_fragments = donor_parser.extract_text_with_coordinates()
+        sample_fragments = sample_parser.extract_text_with_coordinates()
+        
+        donor_parser.close()
+        sample_parser.close()
+        
+        # Step 2: Convert to TextFragment list
+        from backend.services.models import TextFragment
+        
+        donor_frags = []
+        for item in donor_fragments:
+            donor_frags.append(TextFragment(
+                text=item.get("text", ""),
+                x=item.get("x", 0),
+                y=item.get("y", 0),
+                width=item.get("width", 50),
+                height=item.get("height", 10),
+                font_name=item.get("font_name", "Times-Roman"),
+                font_size=item.get("font_size", 11),
+                page_num=item.get("page", 1) - 1  # Convert 1-based to 0-based
+            ))
+        
+        sample_frags = []
+        for item in sample_fragments:
+            sample_frags.append(TextFragment(
+                text=item.get("text", ""),
+                x=item.get("x", 0),
+                y=item.get("y", 0),
+                width=item.get("width", 50),
+                height=item.get("height", 10),
+                font_name=item.get("font_name", "Times-Roman"),
+                font_size=item.get("font_size", 11),
+                page_num=item.get("page", 1) - 1
+            ))
+         # DEBUG
+        print(f"\n=== DONOR FRAGS: {len(donor_frags)} ===")
+        for f in donor_frags[:3]:
+            print(f"  page={f.page_num} text='{f.text[:50]}'")
+        print(f"=== SAMPLE FRAGS: {len(sample_frags)} ===")
+        for f in sample_frags[:3]:
+            print(f"  page={f.page_num} text='{f.text[:50]}'")
+        # Step 3: Align
+        from backend.services.text_alignment import TextAligner
+        
+        aligner = TextAligner(use_ai=True)
+        aligned = aligner.align(donor_frags, sample_frags)
+        
+        # DEBUG
+        print(f"\n=== ALIGNED FRAGMENTS: {len(aligned)} ===")
+        for d, s in aligned:
+            print(f"  page={d.page_num} donor='{d.text[:50]}' -> sample='{s.text[:50]}'")
+        
+        # Step 4: Generate PDF
+        from backend.services.pdf_generator import PDFGenerator
+        
+        generator = PDFGenerator(str(output_path))
+        result_path = generator.generate_pdf(
+            donor_pdf_path=str(donor_path),
+            aligned_fragments=aligned
+        )
+        
+        # Step 5: Return result
+        return FileResponse(
+            path=result_path,
+            media_type="application/pdf",
+            filename=f"aligned_{donor.filename}"
+        )
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+    
+    finally:
+        # Cleanup input files
+        for path in [donor_path, sample_path]:
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception:
+                pass
