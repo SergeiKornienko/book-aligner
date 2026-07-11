@@ -18,6 +18,7 @@ from backend.services.text_alignment import (
     AlignmentRequest,
     AlignmentResponse
 )
+from backend.services.paragraph_builder import ParagraphBuilder, Paragraph
 
 router = APIRouter()
 
@@ -178,3 +179,123 @@ async def align_text(request: AlignmentRequest):
         total_pairs=len(aligned_fragments),
         method="ai"  # Updated to show AI mode
     )
+
+
+# =============================================================================
+# PARAGRAPH ENDPOINTS
+# =============================================================================
+
+@router.post("/paragraphs/build")
+async def build_paragraphs(request: dict):
+    """
+    Build paragraphs from text fragments.
+    
+    Groups individual text fragments into semantic paragraphs
+    based on layout analysis and block classification.
+    """
+    fragments_data = request.get("fragments", [])
+    page_dimensions = request.get("page_dimensions", {"width": 595, "height": 842})
+    
+    # Convert dicts to TextFragment objects
+    fragments = []
+    for f_data in fragments_data:
+        fragment = TextFragment(
+            text=f_data["text"],
+            x=f_data.get("x", 0),
+            y=f_data.get("y", 0),
+            width=f_data.get("width", 100),
+            height=f_data.get("height", 12),
+            font_name=f_data.get("font_name", "Times-Roman"),
+            font_size=f_data.get("font_size", 12),
+            page_num=f_data.get("page_num", 0)
+        )
+        fragments.append(fragment)
+    
+    # Build paragraphs
+    builder = ParagraphBuilder()
+    paragraphs = builder.build_paragraphs(fragments, page_dimensions)
+    
+    # Convert to response format
+    paragraphs_data = []
+    for para in paragraphs:
+        paragraphs_data.append({
+            "text": para.text,
+            "block_type": para.block_type.name,
+            "fragment_count": para.fragment_count,
+            "start_page": para.start_page,
+            "end_page": para.end_page,
+            "spans_pages": para.spans_pages,
+            "avg_font_size": para.avg_font_size
+        })
+    
+    return {
+        "paragraphs": paragraphs_data,
+        "total_paragraphs": len(paragraphs),
+        "page_dimensions": page_dimensions
+    }
+
+
+@router.post("/paragraphs/align")
+async def align_paragraphs(request: dict):
+    """
+    Align paragraphs from donor and sample PDFs.
+    
+    Matches paragraphs by type and content, preserving donor structure.
+    """
+    donor_paragraphs = request.get("donor_paragraphs", [])
+    sample_paragraphs = request.get("sample_paragraphs", [])
+    use_ai = request.get("use_ai", False)
+    
+    # Group by block type for separate alignment
+    from backend.services.text_alignment import TextAligner
+    
+    aligner = TextAligner(use_ai=use_ai)
+    
+    aligned_pairs = []
+    
+    # Align by block type groups
+    for block_type_name in ["TITLE", "SUBTITLE", "BODY", "CAPTION"]:
+        donor_of_type = [p for p in donor_paragraphs if p.get("block_type") == block_type_name]
+        sample_of_type = [p for p in sample_paragraphs if p.get("block_type") == block_type_name]
+        
+        if not donor_of_type or not sample_of_type:
+            continue
+        
+        # Convert to fragments for alignment
+        donor_frags = [
+            TextFragment(
+                text=p["text"],
+                x=0, y=0,
+                width=450, height=12,
+                page_num=p.get("start_page", 0)
+            )
+            for p in donor_of_type
+        ]
+        
+        sample_frags = [
+            TextFragment(
+                text=p["text"],
+                x=0, y=0,
+                width=450, height=12,
+                page_num=p.get("start_page", 0)
+            )
+            for p in sample_of_type
+        ]
+        
+        # Align
+        aligned = aligner.align(donor_frags, sample_frags)
+        
+        for donor_frag, sample_frag in aligned:
+            aligned_pairs.append({
+                "donor_text": donor_frag.text,
+                "sample_text": sample_frag.text,
+                "block_type": block_type_name,
+                "donor_page": donor_frag.page_num,
+                "sample_page": sample_frag.page_num
+            })
+    
+    return {
+        "aligned_paragraphs": aligned_pairs,
+        "total_pairs": len(aligned_pairs),
+        "method": "ai" if use_ai else "sequential"
+    }
