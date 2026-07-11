@@ -37,9 +37,9 @@ class BlockClassifier:
         self.footer_margin = 50      # Bottom margin for footers (points)
         
         # Font size thresholds
-        self.title_min_size = 18     # Minimum font size for titles
+        self.title_min_size = 19     # Minimum font size for titles
         self.subtitle_min_size = 14  # Minimum font size for subtitles
-        self.subtitle_max_size = 17  # Maximum font size for subtitles
+        self.subtitle_max_size = 18  # Maximum font size for subtitles
         self.body_min_size = 10      # Minimum font size for body text
         self.body_max_size = 13      # Maximum font size for body text
         self.caption_max_size = 9    # Maximum font size for captions
