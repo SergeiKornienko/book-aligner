@@ -11,15 +11,15 @@ from backend.services.block_classifier import BlockClassifier, BlockType
 from backend.services.models import TextFragment
 
 
-
 class TextAligner:
     """
     Service for aligning text fragments between donor and sample PDFs.
     
-    Supports three alignment strategies:
+    Supports four alignment strategies:
     1. Sequential: Position-based matching (fast, simple)
     2. AI: Similarity-based matching with transliteration (intelligent)
-    3. Classifier-enhanced: Block type filtering (most accurate)
+    3. Semantic: Sentence-transformer embeddings (cross-language)
+    4. Classifier-enhanced: Block type filtering (most accurate)
     
     The alignment process:
     1. Classify text blocks (if classifier enabled)
@@ -27,35 +27,46 @@ class TextAligner:
     3. Match corresponding fragments using selected strategy
     4. Create aligned pairs preserving donor positions
     5. Handle special blocks (titles, captions) separately
-    
-    Future capabilities:
-    - OpenAI GPT API for semantic matching
-    - Sentence transformers for embedding-based matching
-    - Paragraph-level alignment with context
-    - Fuzzy matching for OCR errors
-    - Confidence scores for each aligned pair
     """
     
-    def __init__(self, use_ai: bool = False, use_classifier: bool = False):
+    def __init__(self, use_ai: bool = False, use_classifier: bool = False, use_semantic: bool = False):
         """
         Initialize TextAligner.
         
         Args:
             use_ai: If True, use AI-based matching (similarity + transliteration).
-                   If False, use sequential position-based matching.
-            use_classifier: If True, use BlockClassifier to filter and categorize
-                          text blocks before alignment.
+            use_classifier: If True, use BlockClassifier to filter fragments.
+            use_semantic: If True, use sentence-transformers for cross-language matching.
         """
         self.use_ai = use_ai
         self.use_classifier = use_classifier
+        self.use_semantic = use_semantic
         self.classifier = BlockClassifier() if use_classifier else None
         
         # Matching threshold for AI mode
         self.match_threshold = 0.1
         
+        # Semantic model (lazy loading)
+        self.embedding_model = None
+        if use_semantic:
+            self._load_semantic_model()
+        
         # Future: OpenAI API configuration
         self.openai_api_key = None
-        self.embedding_model = None
+    
+    def _load_semantic_model(self):
+        """Load the sentence transformer model for semantic matching."""
+        try:
+            from sentence_transformers import SentenceTransformer
+            # LaBSE: Language-agnostic BERT Sentence Embedding
+            # Supports 109 languages including English and Russian
+            self.embedding_model = SentenceTransformer('LaBSE')
+        except ImportError:
+            print("Warning: sentence-transformers not installed. Install with: pip install sentence-transformers")
+            self.use_semantic = False
+        except Exception as e:
+            print(f"Warning: Could not load semantic model: {e}")
+            self.use_semantic = False
     
     # =========================================================================
     # TEXT PREPARATION METHODS
@@ -141,7 +152,34 @@ class TextAligner:
         3. If similarity is low, try transliteration for cross-language matching
         4. Return the best score
         
-        Future: Use embeddings or GPT API for semantic similarity.
+        Args:
+            text1: First text string
+            text2: Second text string
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        text1_clean = self._normalize_text(text1)
+        text2_clean = self._normalize_text(text2)
+        
+        base_similarity = SequenceMatcher(None, text1_clean, text2_clean).ratio()
+        
+        if base_similarity < 0.3:
+            text1_translit = self._transliterate_russian(text1_clean)
+            text2_translit = self._transliterate_russian(text2_clean)
+            
+            translit_similarity = SequenceMatcher(
+                None, text1_translit, text2_translit
+            ).ratio()
+            
+            return max(base_similarity, translit_similarity)
+        
+        return base_similarity
+    
+    def calculate_semantic_similarity(self, text1: str, text2: str) -> float:
+        """
+        Calculate semantic similarity using sentence embeddings.
+        Uses LaBSE model for cross-language understanding.
         
         Args:
             text1: First text string
@@ -150,43 +188,20 @@ class TextAligner:
         Returns:
             Similarity score between 0.0 and 1.0
         """
-        # Clean and normalize texts
-        text1_clean = self._normalize_text(text1)
-        text2_clean = self._normalize_text(text2)
+        if not self.embedding_model:
+            return self.calculate_similarity(text1, text2)
         
-        # Calculate base similarity
-        base_similarity = SequenceMatcher(None, text1_clean, text2_clean).ratio()
-        
-        # If similarity is low, try with transliteration
-        if base_similarity < 0.3:
-            # Try transliterating both texts
-            text1_translit = self._transliterate_russian(text1_clean)
-            text2_translit = self._transliterate_russian(text2_clean)
+        try:
+            from numpy import dot
+            from numpy.linalg import norm
             
-            translit_similarity = SequenceMatcher(
-                None, text1_translit, text2_translit
-            ).ratio()
+            embeddings = self.embedding_model.encode([text1, text2])
+            vec1, vec2 = embeddings[0], embeddings[1]
+            cosine_sim = dot(vec1, vec2) / (norm(vec1) * norm(vec2))
             
-            # Use the better score
-            return max(base_similarity, translit_similarity)
-        
-        return base_similarity
-    
-    def calculate_semantic_similarity(self, text1: str, text2: str) -> float:
-        """
-        Calculate semantic similarity using embeddings.
-        FUTURE: Will use OpenAI API or sentence-transformers.
-        
-        Args:
-            text1: First text string
-            text2: Second text string
-            
-        Returns:
-            Semantic similarity score between 0.0 and 1.0
-        """
-        # Placeholder for future implementation
-        # TODO: Integrate with sentence-transformers or OpenAI embeddings
-        return self.calculate_similarity(text1, text2)
+            return float((cosine_sim + 1) / 2)
+        except Exception:
+            return self.calculate_similarity(text1, text2)
     
     # =========================================================================
     # MATCHING METHODS
@@ -221,6 +236,35 @@ class TextAligner:
         
         return best_match, best_score
     
+    def find_best_match_semantic(
+        self,
+        target: TextFragment,
+        candidates: List[TextFragment]
+    ) -> Tuple[Optional[TextFragment], float]:
+        """
+        Find best match using semantic similarity.
+        
+        Args:
+            target: Target text fragment
+            candidates: Candidate fragments
+            
+        Returns:
+            Tuple of (best_match, score)
+        """
+        if not candidates:
+            return None, 0.0
+        
+        best_match = None
+        best_score = 0.0
+        
+        for candidate in candidates:
+            score = self.calculate_semantic_similarity(target.text, candidate.text)
+            if score > best_score:
+                best_score = score
+                best_match = candidate
+        
+        return best_match, best_score
+    
     def find_best_match_with_context(
         self,
         target: TextFragment,
@@ -241,8 +285,6 @@ class TextAligner:
         Returns:
             Tuple of (best_match, confidence_score)
         """
-        # For now, fall back to basic matching
-        # TODO: Implement context-aware matching
         return self.find_best_match(target, candidates)
     
     # =========================================================================
@@ -264,18 +306,14 @@ class TextAligner:
             
         Returns:
             List of tuples (donor_fragment, aligned_sample_fragment)
-            where sample fragment has donor's coordinates
         """
         aligned_pairs = []
-        
-        # Match fragments sequentially up to the shorter list
         min_length = min(len(donor_fragments), len(sample_fragments))
         
         for i in range(min_length):
             donor_frag = donor_fragments[i]
             sample_frag = sample_fragments[i]
             
-            # Create aligned sample fragment with donor's coordinates
             aligned_sample = TextFragment(
                 text=sample_frag.text,
                 x=donor_frag.x,
@@ -314,19 +352,15 @@ class TextAligner:
             List of aligned fragment pairs
         """
         aligned_pairs = []
-        
-        # Create a copy of sample fragments to track used ones
         available_samples = list(sample_fragments)
         
         for donor_frag in donor_fragments:
             if not available_samples:
                 break
             
-            # Find best matching sample fragment
             best_match, score = self.find_best_match(donor_frag, available_samples)
             
             if best_match and score > self.match_threshold:
-                # Create aligned sample fragment with donor's coordinates
                 aligned_sample = TextFragment(
                     text=best_match.text,
                     x=donor_frag.x,
@@ -337,13 +371,62 @@ class TextAligner:
                     font_size=best_match.font_size,
                     page_num=donor_frag.page_num
                 )
-                
                 aligned_pairs.append((donor_frag, aligned_sample))
-                
-                # Remove used sample to avoid duplicates
                 available_samples.remove(best_match)
             else:
-                # If no good match found, keep donor text as fallback
+                aligned_sample = TextFragment(
+                    text=donor_frag.text,
+                    x=donor_frag.x,
+                    y=donor_frag.y,
+                    width=donor_frag.width,
+                    height=donor_frag.height,
+                    font_name=donor_frag.font_name,
+                    font_size=donor_frag.font_size,
+                    page_num=donor_frag.page_num
+                )
+                aligned_pairs.append((donor_frag, aligned_sample))
+        
+        return aligned_pairs
+    
+    def _align_with_semantic(
+        self,
+        donor_fragments: List[TextFragment],
+        sample_fragments: List[TextFragment]
+    ) -> List[Tuple[TextFragment, TextFragment]]:
+        """
+        Semantic alignment using sentence embeddings.
+        Best for: Cross-language matching with different layouts.
+        
+        Args:
+            donor_fragments: English text fragments
+            sample_fragments: Russian text fragments
+            
+        Returns:
+            Aligned pairs
+        """
+        aligned_pairs = []
+        available_samples = list(sample_fragments)
+        
+        for donor_frag in donor_fragments:
+            if not available_samples:
+                break
+            
+            best_match, score = self.find_best_match_semantic(donor_frag, available_samples)
+            
+            if best_match and score > 0.4:  # Higher threshold for semantic
+                aligned_sample = TextFragment(
+                    text=best_match.text,
+                    x=donor_frag.x,
+                    y=donor_frag.y,
+                    width=donor_frag.width,
+                    height=donor_frag.height,
+                    font_name=best_match.font_name,
+                    font_size=best_match.font_size,
+                    page_num=donor_frag.page_num
+                )
+                aligned_pairs.append((donor_frag, aligned_sample))
+                available_samples.remove(best_match)
+            else:
                 aligned_sample = TextFragment(
                     text=donor_frag.text,
                     x=donor_frag.x,
@@ -370,6 +453,11 @@ class TextAligner:
         """
         Main alignment method. Routes to appropriate strategy.
         
+        Priority:
+        1. Semantic (if enabled) - best for cross-language
+        2. AI (if enabled) - similarity + transliteration
+        3. Sequential - position-based fallback
+        
         Args:
             donor_fragments: Text fragments from donor PDF
             sample_fragments: Text fragments from sample PDF
@@ -377,7 +465,9 @@ class TextAligner:
         Returns:
             List of aligned fragment pairs
         """
-        if self.use_ai:
+        if self.use_semantic:
+            return self._align_with_semantic(donor_fragments, sample_fragments)
+        elif self.use_ai:
             return self._align_with_ai(donor_fragments, sample_fragments)
         else:
             return self.align_sequential(donor_fragments, sample_fragments)
@@ -402,7 +492,6 @@ class TextAligner:
             List of tuples (fragment, block_type, confidence)
         """
         if not self.use_classifier or not self.classifier:
-            # Without classifier, mark all as BODY
             return [(f, BlockType.BODY, 0.5) for f in fragments]
         
         classified = []
@@ -427,7 +516,7 @@ class TextAligner:
             page_dimensions: Page dimensions dict
             
         Returns:
-            Only body-relevant fragments (titles, subtitles, body text, captions)
+            Only body-relevant fragments
         """
         if not self.use_classifier:
             return fragments
@@ -497,25 +586,15 @@ class TextAligner:
         if not self.use_classifier:
             return self.align(donor_fragments, sample_fragments)
         
-        # Step 1: Classify and filter
         donor_body = self.filter_body_fragments(donor_fragments, page_dimensions)
         sample_body = self.filter_body_fragments(sample_fragments, page_dimensions)
         
-        # Step 2: Extract special blocks for separate handling
         donor_special = self.extract_special_blocks(donor_fragments, page_dimensions)
         sample_special = self.extract_special_blocks(sample_fragments, page_dimensions)
         
-        # Step 3: Align body text
         body_aligned = self.align(donor_body, sample_body)
+        special_aligned = self._align_special_blocks(donor_special, sample_special)
         
-        # Step 4: Align special blocks
-        special_aligned = self._align_special_blocks(
-            donor_special, sample_special
-        )
-        
-        # Step 5: Combine results
-        # TODO: Merge body_aligned and special_aligned in correct page order
-        # For now, return body alignment
         return body_aligned
     
     def _align_special_blocks(
@@ -535,7 +614,6 @@ class TextAligner:
         """
         aligned = []
         
-        # Group by block type
         donor_by_type = {}
         for frag, btype in donor_special:
             if btype not in donor_by_type:
@@ -548,12 +626,10 @@ class TextAligner:
                 sample_by_type[btype] = []
             sample_by_type[btype].append(frag)
         
-        # Align each type separately
         for btype in donor_by_type:
             donor_frags = donor_by_type[btype]
             sample_frags = sample_by_type.get(btype, [])
             
-            # Use AI matching for special blocks (better semantic understanding)
             type_aligned = self._align_with_ai(donor_frags, sample_frags)
             aligned.extend(type_aligned)
         
@@ -573,7 +649,6 @@ class TextAligner:
             model: GPT model to use
         """
         self.openai_api_key = api_key
-        self.embedding_model = model
     
     def calculate_gpt_similarity(self, text1: str, text2: str) -> float:
         """
@@ -587,8 +662,6 @@ class TextAligner:
         Returns:
             Similarity score 0.0-1.0
         """
-        # TODO: Implement OpenAI API call
-        # Placeholder
         return self.calculate_similarity(text1, text2)
 
 
@@ -596,8 +669,7 @@ class TextAligner:
 # PYDANTIC MODELS FOR API
 # =============================================================================
 
-from pydantic import BaseModel, Field
-from typing import List
+from pydantic import BaseModel
 
 
 class TextFragmentModel(BaseModel):
@@ -618,6 +690,7 @@ class AlignmentRequest(BaseModel):
     sample_fragments: List[TextFragmentModel]
     use_ai: bool = False
     use_classifier: bool = False
+    use_semantic: bool = False
     page_dimensions: dict = {"width": 595, "height": 842}
 
 

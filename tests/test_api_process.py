@@ -61,6 +61,7 @@ class TestProcessAPI:
         doc.close()
         
         return str(pdf_path)
+
     
     def test_process_endpoint_exists(self):
         """Test that /process endpoint is registered"""
@@ -167,3 +168,35 @@ class TestProcessAPI:
         
         donor_doc.close()
         result_doc.close()
+
+    def test_process_with_semantic(self, sample_donor_pdf, sample_sample_pdf, tmp_path):
+        """Test full pipeline with semantic alignment — should produce better matching"""
+        with open(sample_donor_pdf, "rb") as donor_f, open(sample_sample_pdf, "rb") as sample_f:
+            response = client.post(
+                "/process?use_semantic=true",
+                files={
+                    "donor": ("donor.pdf", donor_f, "application/pdf"),
+                    "sample": ("sample.pdf", sample_f, "application/pdf")
+                }
+            )
+        
+        assert response.status_code == 200
+        
+        # Save and check result
+        result_path = tmp_path / "result_semantic.pdf"
+        result_path.write_bytes(response.content)
+        
+        doc = fitz.open(str(result_path))
+        page = doc[0]
+        text = page.get_text()
+        
+        # Semantic alignment should correctly match titles
+        # "CHAPTER ONE" should map to "ГЛАВА ПЕРВАЯ" (not something else)
+        assert "ГЛАВА ПЕРВАЯ" in text
+        
+        # Check that title appears before body text (correct order)
+        title_pos = text.find("ГЛАВА")
+        body_pos = text.find("Дурсль")
+        assert title_pos < body_pos, "Title should appear before body text"
+        
+        doc.close()

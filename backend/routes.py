@@ -308,7 +308,8 @@ async def align_paragraphs(request: dict):
 @router.post("/process")
 async def process_pdfs(
     donor: UploadFile = File(...),
-    sample: UploadFile = File(...)
+    sample: UploadFile = File(...),
+	use_semantic: bool = False
 ):
     """
     Full end-to-end processing pipeline.
@@ -376,24 +377,21 @@ async def process_pdfs(
                 font_size=item.get("font_size", 11),
                 page_num=item.get("page", 1) - 1
             ))
-         # DEBUG
-        print(f"\n=== DONOR FRAGS: {len(donor_frags)} ===")
-        for f in donor_frags[:3]:
-            print(f"  page={f.page_num} text='{f.text[:50]}'")
-        print(f"=== SAMPLE FRAGS: {len(sample_frags)} ===")
-        for f in sample_frags[:3]:
-            print(f"  page={f.page_num} text='{f.text[:50]}'")
+		
         # Step 3: Align
         from backend.services.text_alignment import TextAligner
+
+        if use_semantic:
+            try:
+                aligner = TextAligner(use_semantic=True)
+            except Exception as e:
+                # Fallback to AI if semantic model fails
+                aligner = TextAligner(use_ai=True)
+        else:
+            aligner = TextAligner(use_ai=True)
         
-        aligner = TextAligner(use_ai=True)
         aligned = aligner.align(donor_frags, sample_frags)
-        
-        # DEBUG
-        print(f"\n=== ALIGNED FRAGMENTS: {len(aligned)} ===")
-        for d, s in aligned:
-            print(f"  page={d.page_num} donor='{d.text[:50]}' -> sample='{s.text[:50]}'")
-        
+
         # Step 4: Generate PDF
         from backend.services.pdf_generator import PDFGenerator
         
