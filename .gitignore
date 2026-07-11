@@ -53,3 +53,11 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated PDFs in uploads
+data/uploads/*.pdf
+!data/uploads/.gitkeep
+
+# Test output
+result.pdf
+result_semantic.pdf
