@@ -7,6 +7,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
 import os
 import uuid
+import fitz
+import io
 from pathlib import Path
 
 from backend.services.models import TextFragment
@@ -309,7 +311,8 @@ async def align_paragraphs(request: dict):
 async def process_pdfs(
     donor: UploadFile = File(...),
     sample: UploadFile = File(...),
-	use_semantic: bool = False
+	use_semantic: bool = False,
+	use_ocr: bool = False
 ):
     """
     Full end-to-end processing pipeline.
@@ -336,18 +339,62 @@ async def process_pdfs(
         f.write(sample_content)
     
     try:
-        # Step 1: Parse PDFs
+        # Step 1: Parse PDFs (with OCR if enabled)
         from backend.services.pdf_parser import PDFParser
         
-        donor_parser = PDFParser(str(donor_path))
-        sample_parser = PDFParser(str(sample_path))
-        
-        # Get all text as simple fragments
-        donor_fragments = donor_parser.extract_text_with_coordinates()
-        sample_fragments = sample_parser.extract_text_with_coordinates()
-        
-        donor_parser.close()
-        sample_parser.close()
+        if use_ocr:
+            from backend.services.ocr_processor import OCRProcessor
+            from PIL import Image
+            
+            ocr = OCRProcessor()
+            
+            # Process donor with OCR
+            donor_doc = fitz.open(str(donor_path))
+            donor_fragments = []
+            for page_num in range(donor_doc.page_count):
+                pix = donor_doc[page_num].get_pixmap(dpi=200)
+                img = Image.open(io.BytesIO(pix.tobytes('png')))
+                regions = ocr.extract_text_regions(img, page_num=page_num, lang='eng')
+                for region in regions:
+                    donor_fragments.append({
+                        "page": page_num + 1,
+                        "x": region.x,
+                        "y": region.y,
+                        "width": region.width,
+                        "height": region.height,
+                        "text": region.text,
+                        "font_name": "Times-Roman",
+                        "font_size": 11.0
+                    })
+            donor_doc.close()
+            
+            # Process sample with OCR
+            sample_doc = fitz.open(str(sample_path))
+            sample_fragments = []
+            for page_num in range(sample_doc.page_count):
+                pix = sample_doc[page_num].get_pixmap(dpi=200)
+                img = Image.open(io.BytesIO(pix.tobytes('png')))
+                regions = ocr.extract_text_regions(img, page_num=page_num, lang='rus')
+                for region in regions:
+                    sample_fragments.append({
+                        "page": page_num + 1,
+                        "x": region.x,
+                        "y": region.y,
+                        "width": region.width,
+                        "height": region.height,
+                        "text": region.text,
+                        "font_name": "Times-Roman",
+                        "font_size": 11.0
+                    })
+            sample_doc.close()
+        else:
+            # Standard PDF parsing
+            donor_parser = PDFParser(str(donor_path))
+            sample_parser = PDFParser(str(sample_path))
+            donor_fragments = donor_parser.extract_text_with_coordinates()
+            sample_fragments = sample_parser.extract_text_with_coordinates()
+            donor_parser.close()
+            sample_parser.close()
         
         # Step 2: Convert to TextFragment list
         from backend.services.models import TextFragment

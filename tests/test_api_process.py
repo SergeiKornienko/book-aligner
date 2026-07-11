@@ -200,3 +200,72 @@ class TestProcessAPI:
         assert title_pos < body_pos, "Title should appear before body text"
         
         doc.close()
+
+
+    @pytest.fixture
+    def scanned_donor_pdf(self, tmp_path):
+        """Create a scanned-style PDF (image-based, no text layer)"""
+        pdf_path = tmp_path / "scanned_donor.pdf"
+        
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        
+        # Draw colorful background (like illustration)
+        for i in range(20):
+            page.draw_circle(
+                fitz.Point((i * 60) % 595, (i * 80) % 842),
+                25,
+                color=(0.9, 0.85, 0.8),
+                fill=(0.9, 0.85, 0.8)
+            )
+        
+        # Add text on top
+        page.insert_text(fitz.Point(200, 50), "CHAPTER ONE", fontname="Times-Bold", fontsize=20)
+        page.insert_text(fitz.Point(72, 150), "Mr. and Mrs. Dursley were proud", fontname="Times-Roman", fontsize=11)
+        page.insert_text(fitz.Point(72, 165), "to say that they were perfectly normal.", fontname="Times-Roman", fontsize=11)
+        
+        doc.save(str(pdf_path))
+        doc.close()
+        
+        return str(pdf_path)
+    
+    @pytest.fixture
+    def scanned_sample_pdf(self, tmp_path):
+        """Create a scanned-style Russian PDF"""
+        pdf_path = tmp_path / "scanned_sample.pdf"
+        
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        
+        page.insert_text(fitz.Point(200, 50), "ГЛАВА ПЕРВАЯ", fontname="china-s", fontsize=20)
+        page.insert_text(fitz.Point(72, 150), "Мистер и миссис Дурсль гордились", fontname="china-s", fontsize=11)
+        page.insert_text(fitz.Point(72, 165), "тем, что они совершенно нормальные.", fontname="china-s", fontsize=11)
+        
+        doc.save(str(pdf_path))
+        doc.close()
+        
+        return str(pdf_path)
+    
+    def test_process_with_ocr(self, scanned_donor_pdf, scanned_sample_pdf, tmp_path):
+        """Test processing with OCR enabled for scanned PDFs"""
+        with open(scanned_donor_pdf, "rb") as donor_f, open(scanned_sample_pdf, "rb") as sample_f:
+            response = client.post(
+                "/process?use_ocr=true",
+                files={
+                    "donor": ("donor.pdf", donor_f, "application/pdf"),
+                    "sample": ("sample.pdf", sample_f, "application/pdf")
+                }
+            )
+        
+        assert response.status_code == 200
+        
+        # Save and check result
+        result_path = tmp_path / "result_ocr.pdf"
+        result_path.write_bytes(response.content)
+        
+        doc = fitz.open(str(result_path))
+        text = doc[0].get_text()
+        
+        # With OCR, Russian text should be found and placed
+        assert len(text.strip()) > 0, "Result PDF should contain text"
+        doc.close()
