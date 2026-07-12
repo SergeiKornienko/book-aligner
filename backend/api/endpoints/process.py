@@ -11,7 +11,7 @@ import fitz
 from PIL import Image
 
 from backend.services.pdf_parser import PDFParser
-from backend.services.text_alignment import TextAligner
+from backend.services.alignment import TextAligner
 from backend.services.models import TextFragment
 from backend.services.pdf_generator import PDFGenerator
 from backend.api.dependencies import get_upload_dir

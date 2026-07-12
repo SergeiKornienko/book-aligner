@@ -4,8 +4,8 @@ Matches text fragments between donor and sample PDFs.
 """
 
 import pytest
+from backend.services.alignment import TextAligner
 from backend.services.models import TextFragment
-from backend.services.text_alignment import TextAligner
 from backend.services.block_classifier import BlockType
 
 

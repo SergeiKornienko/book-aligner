@@ -4,8 +4,8 @@ Identifies different types of text blocks in PDF pages.
 """
 
 import pytest
+from backend.services.alignment import TextAligner
 from backend.services.models import TextFragment
-from backend.services.text_alignment import TextAligner
 from backend.services.block_classifier import BlockClassifier, BlockType
 
 

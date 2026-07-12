@@ -4,7 +4,7 @@ Paragraph building and alignment endpoints.
 
 from fastapi import APIRouter
 from backend.services.paragraph_builder import ParagraphBuilder
-from backend.services.text_alignment import TextAligner, TextFragment
+from backend.services.alignment import TextAligner, TextFragment
 from backend.services.models import TextFragment
 from backend.logger import logger
 

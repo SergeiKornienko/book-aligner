@@ -3,12 +3,9 @@ Text alignment endpoint.
 """
 
 from fastapi import APIRouter
-from backend.services.text_alignment import (
-    TextAligner,
-    TextFragment,
-    TextFragmentModel,
-    AlignmentRequest,
-    AlignmentResponse
+from backend.services.alignment import (
+    TextAligner, TextFragment, TextFragmentModel,
+    AlignmentRequest, AlignmentResponse
 )
 from backend.logger import logger
 

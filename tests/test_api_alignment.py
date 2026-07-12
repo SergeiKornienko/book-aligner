@@ -7,9 +7,8 @@ from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch, AsyncMock
 import json
 from backend.main import app
+from backend.services.alignment import TextAligner
 from backend.services.models import TextFragment
-from backend.services.text_alignment import TextAligner
-
 
 client = TestClient(app)
 

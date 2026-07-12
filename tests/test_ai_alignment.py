@@ -4,8 +4,8 @@ Uses embeddings to match text fragments intelligently.
 """
 
 import pytest
+from backend.services.alignment import TextAligner
 from backend.services.models import TextFragment
-from backend.services.text_alignment import TextAligner
 
 
 class TestAIPoweredAlignment:

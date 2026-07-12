@@ -4,7 +4,8 @@ Provides true cross-language text matching.
 """
 
 import pytest
-from backend.services.text_alignment import TextAligner, TextFragment
+from backend.services.alignment import TextAligner
+from backend.services.models import TextFragment
 
 
 class TestSemanticAligner:
