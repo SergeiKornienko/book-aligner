@@ -8,12 +8,45 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from backend.services.pdf_parser import PDFParser
 from backend.api.dependencies import get_upload_dir
 from backend.logger import logger
+import json
+import asyncio
+from fastapi.responses import StreamingResponse
+from backend.services.progress_tracker import progress_tracker
 
 router = APIRouter()
 
 # In-memory storage (replace with database later)
 jobs = {}
 
+
+@router.get("/job/{job_id}/progress")
+async def get_progress(job_id: str):
+    """Stream progress updates via Server-Sent Events."""
+    status = progress_tracker.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    async def event_stream():
+        while True:
+            status = progress_tracker.get_status(job_id)
+            if status is None:
+                break
+            
+            yield f"data: {json.dumps(status)}\n\n"
+            
+            if status["status"] in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                break
+            
+            await progress_tracker.wait_for_update(job_id, timeout=1)
+    
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
